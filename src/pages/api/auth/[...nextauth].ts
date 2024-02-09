@@ -1,40 +1,42 @@
-import { Transaction } from "@solana/web3.js";
 import { NextApiRequest, NextApiResponse } from "next";
-import NextAuth, { NextAuthOptions } from "next-auth";
+import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { getCsrfToken } from "next-auth/react";
+import { SigninMessage } from "../../../utils/signinMessage";
 
 export default async function auth(req: NextApiRequest, res: NextApiResponse) {
   const providers = [
     CredentialsProvider({
       name: "Solana",
       credentials: {
+        message: {
+          label: "Message",
+          type: "text",
+        },
         signature: {
           label: "Signature",
           type: "text",
         },
       },
-      async authorize(credentials) {
+      async authorize(credentials, req: any) {
         try {
-
-          const recoveredTransaction = Transaction.from(
-            Buffer.from(credentials!.signature, "base64")
+          const signinMessage = new SigninMessage(
+            JSON.parse(credentials?.message || "{}")
           );
-
-          console.log(recoveredTransaction.instructions[0].data.toString('utf8'))
-
-          const signinMessage = JSON.parse(recoveredTransaction.instructions[0].data.toString() || "{}")
-
           const nextAuthUrl = new URL(process.env.NEXTAUTH_URL!);
           if (signinMessage.domain !== nextAuthUrl.host) {
             return null;
           }
 
-          if (signinMessage.nonce !== (await getCsrfToken({ req }))) {
+          const csrfToken = await getCsrfToken({ req: { ...req, body: null } });
+
+          if (signinMessage.nonce !== csrfToken) {
             return null;
           }
 
-          const validationResult = recoveredTransaction.verifySignatures();
+          const validationResult = await signinMessage.validate(
+            credentials?.signature || ""
+          );
 
           if (!validationResult)
             throw new Error("Could not validate the signed message");
@@ -52,7 +54,7 @@ export default async function auth(req: NextApiRequest, res: NextApiResponse) {
   const isDefaultSigninPage =
     req.method === "GET" && req.query.nextauth?.includes("signin");
 
-  // Hides Sign-In with Solana from default sign page
+  // Hides Sign-In with Solana from the default sign page
   if (isDefaultSigninPage) {
     providers.pop();
   }
@@ -64,7 +66,8 @@ export default async function auth(req: NextApiRequest, res: NextApiResponse) {
     },
     secret: process.env.NEXTAUTH_SECRET,
     callbacks: {
-      async session({ session, token }: any) {
+      async session({ session, token }) {
+        // @ts-ignore
         session.publicKey = token.sub;
         if (session.user) {
           session.user.name = token.sub;
